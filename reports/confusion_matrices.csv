@@ -1,0 +1,3 @@
+Model,True Negative,False Positive,False Negative,True Positive
+logistic_regression,1741,169,44,46
+random_forest,1910,0,53,37

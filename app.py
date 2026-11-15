@@ -1,950 +1,802 @@
-import streamlit as st
-import pandas as pd
-import plotly.express as px
-import joblib
-
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import (
-    confusion_matrix,
-    classification_report,
-    accuracy_score,
-    ConfusionMatrixDisplay
-)
-import matplotlib.pyplot as plt
 
 from pathlib import Path
 
-# ---------------- PAGE CONFIG ----------------
+import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.express as px
+import joblib
+
+from sklearn.metrics import (
+    confusion_matrix,
+    precision_score,
+    recall_score,
+    f1_score,
+    accuracy_score,
+    average_precision_score
+)
+
+
+# --------------------------------------------------
+# PATHS AND CONFIGURATION
+# --------------------------------------------------
+
+BASE_DIR = Path(__file__).resolve().parent
+
+DATA_PATH = BASE_DIR / "data" / "raw" / "upi_transactions.csv"
+MODEL_DIR = BASE_DIR / "models"
+REPORT_DIR = BASE_DIR / "reports"
 
 st.set_page_config(
     page_title="UPI Fraud Intelligence",
-    page_icon="🛡️",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    page_icon="💳",
+    layout="wide"
 )
 
-BASE_DIR = Path(__file__).parent
-DATA_PATH = BASE_DIR / "upi_transactions.csv"
-MODEL_PATH = BASE_DIR / "upi_fraud_model.joblib"
 
-# ---------------- PROFESSIONAL UI ----------------
+# --------------------------------------------------
+# CUSTOM CSS
+# --------------------------------------------------
 
 st.markdown("""
 <style>
-    .stApp {
-        background-color: #0b1120;
-        color: #f1f5f9;
-    }
 
-    [data-testid="stSidebar"] {
-        background-color: #111827;
-        border-right: 1px solid #263247;
-    }
+.main {
+    background-color: #f5f7fb;
+}
 
-    .main-title {
-        font-size: 34px;
-        font-weight: 800;
-        color: #e2e8f0;
-        margin-bottom: 4px;
-    }
+.block-container {
+    padding-top: 1.5rem;
+}
 
-    .subtitle {
-        color: #94a3b8;
-        font-size: 15px;
-        margin-bottom: 25px;
-    }
+.metric-card {
+    background-color: white;
+    padding: 18px;
+    border-radius: 12px;
+    border: 1px solid #e5e7eb;
+}
 
-    .metric-card {
-        background: linear-gradient(135deg, #172033, #111827);
-        padding: 20px;
-        border-radius: 14px;
-        border: 1px solid #263247;
-        margin-bottom: 10px;
-    }
-
-    .metric-label {
-        color: #94a3b8;
-        font-size: 14px;
-    }
-
-    .metric-value {
-        color: #f8fafc;
-        font-size: 27px;
-        font-weight: 800;
-        margin-top: 7px;
-    }
-
-    .section-title {
-        color: #e2e8f0;
-        font-size: 21px;
-        font-weight: 700;
-        margin-top: 18px;
-        margin-bottom: 12px;
-    }
-
-    div[data-testid="stMetric"] {
-        background-color: #111827;
-        border: 1px solid #263247;
-        padding: 16px;
-        border-radius: 12px;
-    }
-
-    .stButton button {
-        border-radius: 9px;
-        font-weight: 600;
-    }
-
-    .notice {
-        background-color: #172033;
-        border-left: 4px solid #38bdf8;
-        padding: 13px;
-        border-radius: 6px;
-        color: #cbd5e1;
-    }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ---------------- LOAD DATA AND MODEL ----------------
+# --------------------------------------------------
+# DATA LOADING
+# --------------------------------------------------
 
 @st.cache_data
-def load_data(path, modified_time):
-    data = pd.read_csv(path)
+def load_data():
 
-    if "transaction_time" in data.columns:
-        data["transaction_time"] = pd.to_datetime(
-            data["transaction_time"], errors="coerce"
-        )
+    df = pd.read_csv(DATA_PATH)
 
-    if "amount" in data.columns:
-        data["amount"] = pd.to_numeric(
-            data["amount"], errors="coerce"
-        )
-
-    if "is_suspicious" not in data.columns:
-        if "if_flag_v2" in data.columns:
-            data["is_suspicious"] = data["if_flag_v2"]
-        else:
-            data["is_suspicious"] = False
-
-    data["is_suspicious"] = (
-        data["is_suspicious"]
-        .astype(str)
-        .str.lower()
-        .isin(["true", "1", "yes"])
+    df["transaction_time"] = pd.to_datetime(
+        df["transaction_time"],
+        errors="coerce"
     )
 
-    return data
+    df["amount"] = pd.to_numeric(
+        df["amount"],
+        errors="coerce"
+    )
+
+    df["is_fraud"] = pd.to_numeric(
+        df["is_fraud"],
+        errors="coerce"
+    ).fillna(0).astype(int)
+
+    df["is_suspicious"] = (
+        df["if_flag_v2"].astype(str).str.lower()
+        .isin(["1", "true", "yes"])
+    )
+
+    return df
 
 
 @st.cache_resource
-def load_model(path, modified_time):
-    return joblib.load(path)
+def load_saved_model(model_name):
+
+    model_path = MODEL_DIR / f"{model_name}.joblib"
+
+    if not model_path.exists():
+        return None
+
+    saved_data = joblib.load(model_path)
+
+    return saved_data["model"]
 
 
-# ---------------- SIDEBAR ----------------
+# --------------------------------------------------
+# SIDEBAR
+# --------------------------------------------------
 
-st.sidebar.markdown("# 🛡️ UPI Intelligence")
-st.sidebar.caption("Fraud & Anomaly Monitoring")
-st.sidebar.divider()
+st.sidebar.title("💳 UPI Fraud Intelligence")
+
+st.sidebar.caption("AI-Powered Transaction Analysis")
 
 page = st.sidebar.radio(
-    "NAVIGATION",
+    "Navigation",
     [
         "Overview",
         "Live Prediction",
         "Model Performance",
         "Transactions",
+        "Fraud Analysis",
         "About Project"
     ]
 )
 
 st.sidebar.divider()
-st.sidebar.caption("Machine Learning: Isolation Forest")
-st.sidebar.caption("Dataset: Synthetic transactions")
+
+st.sidebar.info(
+    "Portfolio project using a synthetic UPI transaction dataset."
+)
 
 
-# ---------------- CHECK FILES ----------------
-
-if not DATA_PATH.exists():
-    st.error("Dataset file nahi mili: upi_transactions.csv")
-    st.info("CSV file ko app.py ke same folder mein rakho.")
-    st.stop()
+# --------------------------------------------------
+# LOAD DATA
+# --------------------------------------------------
 
 try:
-    df = load_data(
-        str(DATA_PATH),
-        DATA_PATH.stat().st_mtime
-    )
+    df = load_data()
+
 except Exception as error:
-    st.error(f"Dataset load nahi hui: {error}")
+
+    st.error(f"Dataset loading failed: {error}")
     st.stop()
 
-if MODEL_PATH.exists():
-    try:
-        model = load_model(
-            str(MODEL_PATH),
-            MODEL_PATH.stat().st_mtime
-        )
-    except Exception as error:
-        model = None
-        st.error(f"Model load nahi hua: {error}")
-else:
-    model = None
 
-
-# ---------------- HELPER FUNCTIONS ----------------
-
-def money(value):
-    return f"₹{value:,.2f}"
-
-
-def metric_card(label, value):
-    st.markdown(
-        f"""
-        <div class="metric-card">
-            <div class="metric-label">{label}</div>
-            <div class="metric-value">{value}</div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-
-def chart_layout(fig):
-    fig.update_layout(
-        template="plotly_dark",
-        paper_bgcolor="#0b1120",
-        plot_bgcolor="#111827",
-        font_color="#e2e8f0",
-        margin=dict(l=20, r=20, t=45, b=20),
-        legend_title_text=""
-    )
-    return fig
-
-
-# ---------------- PAGE: OVERVIEW ----------------
+# --------------------------------------------------
+# OVERVIEW
+# --------------------------------------------------
 
 if page == "Overview":
 
-    st.markdown(
-        '<div class="main-title">🛡️ UPI Fraud Intelligence</div>',
-        unsafe_allow_html=True
-    )
-    st.markdown(
-        '<div class="subtitle">'
-        'Transaction monitoring, anomaly analytics and risk insights'
-        '</div>',
-        unsafe_allow_html=True
+    st.title("UPI Fraud Intelligence Dashboard")
+
+    st.caption(
+        "Monitor transaction patterns and identify suspicious activity."
     )
 
-    total = len(df)
+    total_transactions = len(df)
 
-    if "is_suspicious" in df.columns:
-        suspicious = int(df["is_suspicious"].sum())
-    else:
-        suspicious = 0
+    fraud_transactions = int(df["is_fraud"].sum())
 
-    normal = total - suspicious
-    rate = (suspicious / total * 100) if total else 0
-
-    c1, c2, c3, c4 = st.columns(4)
-
-    with c1:
-        metric_card("TOTAL TRANSACTIONS", f"{total:,}")
-
-    with c2:
-        metric_card("FLAGGED ANOMALIES", f"{suspicious:,}")
-
-    with c3:
-        metric_card("OTHER TRANSACTIONS", f"{normal:,}")
-
-    with c4:
-        metric_card("FLAGGED RATE", f"{rate:.2f}%")
-
-    st.markdown(
-        '<div class="section-title">📊 Transaction Analytics</div>',
-        unsafe_allow_html=True
+    suspicious_transactions = int(
+        df["is_suspicious"].sum()
     )
 
-    col1, col2 = st.columns(2)
+    total_amount = df["amount"].sum()
 
-    with col1:
-        if "amount" in df.columns:
-            fig = px.histogram(
-                df,
-                x="amount",
-                color="is_suspicious",
-                nbins=35,
-                title="Transaction Amount Distribution",
-                labels={
-                    "amount": "Amount (₹)",
-                    "is_suspicious": "Flagged anomaly"
-                },
-                color_discrete_map={
-                    True: "#fb7185",
-                    False: "#38bdf8"
-                }
-            )
-            st.plotly_chart(chart_layout(fig), width="stretch")
-        else:
-            st.info("Dataset mein amount column nahi hai.")
-
-    with col2:
-        pie_df = pd.DataFrame({
-            "Status": ["Flagged anomaly", "Other transactions"],
-            "Count": [suspicious, normal]
-        })
-
-        fig = px.pie(
-            pie_df,
-            names="Status",
-            values="Count",
-            hole=0.65,
-            title="Transaction Status Breakdown",
-            color="Status",
-            color_discrete_map={
-                "Flagged anomaly": "#fb7185",
-                "Other transactions": "#38bdf8"
-            }
-        )
-        st.plotly_chart(chart_layout(fig), width="stretch")
-
-    col3, col4 = st.columns(2)
-
-    with col3:
-        if "location" in df.columns:
-            location_df = (
-                df.groupby("location", dropna=False)["is_suspicious"]
-                .sum()
-                .reset_index(name="Flagged Count")
-                .sort_values("Flagged Count", ascending=False)
-                .head(10)
-            )
-
-            fig = px.bar(
-                location_df,
-                x="location",
-                y="Flagged Count",
-                title="Flagged Anomalies by Location",
-                color="Flagged Count",
-                color_continuous_scale="Reds"
-            )
-            st.plotly_chart(chart_layout(fig), width="stretch")
-        else:
-            st.info("Location column available nahi hai.")
-
-    with col4:
-        if "merchant_category" in df.columns:
-            merchant_df = (
-                df.groupby("merchant_category", dropna=False)
-                ["is_suspicious"]
-                .sum()
-                .reset_index(name="Flagged Count")
-                .sort_values("Flagged Count", ascending=False)
-            )
-
-            fig = px.bar(
-                merchant_df,
-                x="merchant_category",
-                y="Flagged Count",
-                title="Flagged Anomalies by Merchant",
-                color="Flagged Count",
-                color_continuous_scale="Blues"
-            )
-            st.plotly_chart(chart_layout(fig), width="stretch")
-        else:
-            st.info("Merchant category column available nahi hai.")
-
-    st.markdown(
-        """
-        <div class="notice">
-        <b>Important:</b> This project uses synthetic transaction data.
-        Flagged anomalies are model alerts, not confirmed financial fraud.
-        </div>
-        """,
-        unsafe_allow_html=True
+    fraud_rate = (
+        fraud_transactions / total_transactions * 100
+        if total_transactions else 0
     )
 
-# ---------------- ADVANCED FRAUD INSIGHTS ----------------
+    col1, col2, col3, col4 = st.columns(4)
+
+    col1.metric(
+        "Total Transactions",
+        f"{total_transactions:,}"
+    )
+
+    col2.metric(
+        "Fraud Labels",
+        f"{fraud_transactions:,}"
+    )
+
+    col3.metric(
+        "Anomaly Flags",
+        f"{suspicious_transactions:,}"
+    )
+
+    col4.metric(
+        "Fraud Label Rate",
+        f"{fraud_rate:.2f}%"
+    )
 
     st.divider()
 
-    st.markdown(
-        '<div class="section-title">🔍 Advanced Fraud Insights</div>',
-        unsafe_allow_html=True
-    )
+    left, right = st.columns(2)
 
-    # 1. Actual labelled fraud vs normal transactions
-    if "is_fraud" in df.columns:
+    with left:
 
-        fraud_data = df.copy()
-        fraud_data["is_fraud"] = pd.to_numeric(
-            fraud_data["is_fraud"], errors="coerce"
-        ).fillna(0).astype(int)
+        st.subheader("Transaction Amount Distribution")
 
-        fraud_summary = (
-            fraud_data["is_fraud"]
-            .map({0: "Normal", 1: "Fraud"})
-            .value_counts()
-            .rename_axis("Transaction Type")
-            .reset_index(name="Count")
+        fig = px.histogram(
+            df,
+            x="amount",
+            nbins=40,
+            title="Transaction Amount"
         )
 
-        col1, col2 = st.columns(2)
+        st.plotly_chart(fig, width="stretch")
 
-        with col1:
-            fig = px.bar(
-                fraud_summary,
-                x="Transaction Type",
-                y="Count",
-                color="Transaction Type",
-                title="Actual Label Distribution",
-                color_discrete_map={
-                    "Normal": "#38bdf8",
-                    "Fraud": "#fb7185"
-                }
-            )
-            st.plotly_chart(
-                chart_layout(fig),
-                use_container_width=True
-            )
+    with right:
 
-        # 2. Transaction amount comparison
-        with col2:
-            if "amount" in fraud_data.columns:
-                fig = px.box(
-                    fraud_data,
-                    x="is_fraud",
-                    y="amount",
-                    color="is_fraud",
-                    title="Transaction Amount: Normal vs Fraud",
-                    labels={
-                        "is_fraud": "Actual Label (0=Normal, 1=Fraud)",
-                        "amount": "Transaction Amount (₹)"
-                    },
-                    color_discrete_map={
-                        0: "#38bdf8",
-                        1: "#fb7185"
-                    }
-                )
-                st.plotly_chart(
-                    chart_layout(fig),
-                    use_container_width=True
-                )
+        st.subheader("Fraud Label Distribution")
 
-    else:
-        st.info(
-            "Actual fraud analysis ke liye CSV mein is_fraud column chahiye."
-        )
-
-    # 3. Hourly transaction trend
-    if "hour" in df.columns:
-
-        hourly_data = df.copy()
-        hourly_data["hour"] = pd.to_numeric(
-            hourly_data["hour"], errors="coerce"
-        )
-        hourly_data = hourly_data.dropna(subset=["hour"])
-
-        if not hourly_data.empty:
-            hourly_summary = (
-                hourly_data.groupby("hour")
-                .size()
-                .reset_index(name="Transactions")
-                .sort_values("hour")
-            )
-
-            fig = px.line(
-                hourly_summary,
-                x="hour",
-                y="Transactions",
-                markers=True,
-                title="Transaction Activity by Hour",
-                labels={
-                    "hour": "Hour of Day",
-                    "Transactions": "Number of Transactions"
-                }
-            )
-
-            st.plotly_chart(
-                chart_layout(fig),
-                use_container_width=True
-            )
-
-    # 4. High-value flagged transactions
-    if "amount" in df.columns and "is_suspicious" in df.columns:
-
-        st.subheader("🚨 High-Value Flagged Transactions")
-
-        flagged_data = df[df["is_suspicious"]].copy()
-
-        if not flagged_data.empty:
-
-            flagged_data = flagged_data.sort_values(
-                "amount", ascending=False
-            ).head(10)
-
-            display_columns = [
-                col for col in [
-                    "transaction_id",
-                    "amount",
-                    "transaction_time",
-                    "merchant_category",
-                    "device_type",
-                    "location"
-                ]
-                if col in flagged_data.columns
+        label_data = pd.DataFrame({
+            "Category": ["Legitimate", "Fraud"],
+            "Count": [
+                int((df["is_fraud"] == 0).sum()),
+                fraud_transactions
             ]
+        })
 
-            st.dataframe(
-                flagged_data[display_columns],
-                use_container_width=True,
-                hide_index=True
-            )
-
-        else:
-            st.info("Dataset mein koi flagged transaction nahi mili.")
-
-    st.caption(
-        "Note: Dataset synthetic hai. Flagged transactions model alerts hain, "
-        "confirmed financial fraud nahi."
-    )
-    
-# ---------------- PAGE: LIVE PREDICTION ----------------
-
-elif page == "Live Prediction":
-
-    st.markdown(
-        '<div class="main-title">🤖 Live Anomaly Prediction</div>',
-        unsafe_allow_html=True
-    )
-    st.markdown(
-        '<div class="subtitle">'
-        'Enter transaction details to evaluate an anomaly score.'
-        '</div>',
-        unsafe_allow_html=True
-    )
-
-    if model is None:
-        st.error(
-            "Trained model load nahi hua. "
-            "upi_fraud_model.joblib ko app.py ke same folder mein rakho."
-        )
-        st.stop()
-
-    st.info(
-        "Prediction ke liye transaction amount, hour, "
-        "user average amount aur last-hour transaction count chahiye."
-    )
-
-    with st.form("prediction_form"):
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            amount = st.number_input(
-                "Transaction Amount (₹)",
-                min_value=0.01,
-                max_value=10000000.0,
-                value=2500.0,
-                step=100.0
-            )
-
-            hour = st.slider(
-                "Transaction Hour",
-                min_value=0,
-                max_value=23,
-                value=14
-            )
-
-        with col2:
-            user_avg_amount = st.number_input(
-                "User's Average Transaction Amount (₹)",
-                min_value=0.0,
-                max_value=10000000.0,
-                value=1500.0,
-                step=100.0
-            )
-
-            transactions_last_hour = st.number_input(
-                "Transactions by User in Last Hour",
-                min_value=0,
-                max_value=1000,
-                value=1,
-                step=1
-            )
-
-        submitted = st.form_submit_button(
-            "🔍 Analyze Transaction",
-            width="stretch"
+        fig = px.pie(
+            label_data,
+            names="Category",
+            values="Count",
+            hole=0.5
         )
 
-    if submitted:
+        st.plotly_chart(fig, width="stretch")
 
-        amount_deviation = amount - user_avg_amount
+    st.subheader("Transactions by Hour")
 
-        # Feature order must match the training notebook.
-        input_data = pd.DataFrame(
-            [[
-                amount,
-                hour,
-                amount_deviation,
-                transactions_last_hour
-            ]],
-            columns=[
-                "amount",
-                "hour",
-                "amount_deviation",
-                "transactions_last_hour"
-            ]
-        )
-
-        try:
-            prediction = model.predict(input_data)[0]
-            anomaly_score = float(model.decision_function(input_data)[0])
-
-            st.divider()
-            st.subheader("Analysis Result")
-
-            r1, r2 = st.columns(2)
-
-            with r1:
-                if prediction == -1:
-                    st.error("⚠️ ANOMALY FLAGGED")
-                    st.write(
-                        "The model considers this transaction unusual "
-                        "relative to the patterns it learned."
-                    )
-                else:
-                    st.success("✅ NO ANOMALY FLAGGED")
-                    st.write(
-                        "The model did not flag this transaction "
-                        "as an anomaly."
-                    )
-
-            with r2:
-                st.metric("Model Decision Score", f"{anomaly_score:.5f}")
-                st.caption(
-                    "Lower scores indicate more anomalous observations "
-                    "for this Isolation Forest model."
-                )
-
-            st.warning(
-                "This is an experimental model using synthetic training "
-                "data. It is not connected to a bank or live UPI network. "
-                "An alert is not proof of fraud, and a normal result "
-                "does not guarantee safety."
-            )
-
-        except Exception as error:
-            st.error(f"Prediction failed: {error}")
-
-# ---------------- PAGE: TRANSACTIONS ----------------
-
-elif page == "Transactions":
-
-    st.markdown(
-        '<div class="main-title">🔎 Transaction Explorer</div>',
-        unsafe_allow_html=True
-    )
-    st.markdown(
-        '<div class="subtitle">'
-        'Search, filter and export transaction records'
-        '</div>',
-        unsafe_allow_html=True
+    hourly = (
+        df.groupby("hour")
+        .size()
+        .reset_index(name="Transactions")
     )
 
-    filtered = df.copy()
+    fig = px.bar(
+        hourly,
+        x="hour",
+        y="Transactions"
+    )
 
-    col1, col2, col3 = st.columns(3)
+    st.plotly_chart(fig, width="stretch")
 
-    with col1:
-        if "location" in filtered.columns:
-            locations = sorted(
-                filtered["location"].dropna().astype(str).unique()
-            )
-            selected_locations = st.multiselect(
-                "Location",
-                locations,
-                default=locations
-            )
-            filtered = filtered[
-                filtered["location"].astype(str).isin(selected_locations)
-            ]
-
-    with col2:
-        if "merchant_category" in filtered.columns:
-            categories = sorted(
-                filtered["merchant_category"].dropna().astype(str).unique()
-            )
-            selected_categories = st.multiselect(
-                "Merchant Category",
-                categories,
-                default=categories
-            )
-            filtered = filtered[
-                filtered["merchant_category"].astype(str)
-                .isin(selected_categories)
-            ]
-
-    with col3:
-        status = st.selectbox(
-            "Transaction Status",
-            ["All", "Flagged anomalies", "Other transactions"]
-        )
-
-        if status == "Flagged anomalies":
-            filtered = filtered[filtered["is_suspicious"]]
-        elif status == "Other transactions":
-            filtered = filtered[~filtered["is_suspicious"]]
-
-    col4, col5 = st.columns(2)
-
-    with col4:
-        if "amount" in filtered.columns and not filtered.empty:
-            min_amount = float(filtered["amount"].min())
-            max_amount = float(filtered["amount"].max())
-
-            amount_range = st.slider(
-                "Amount Range (₹)",
-                min_value=min_amount,
-                max_value=max_amount if max_amount > min_amount
-                else min_amount + 1.0,
-                value=(min_amount, max_amount if max_amount > min_amount
-                       else min_amount + 1.0)
-            )
-
-            filtered = filtered[
-                filtered["amount"].between(
-                    amount_range[0], amount_range[1]
-                )
-            ]
-
-    with col5:
-        transaction_search = st.text_input("Search Transaction ID")
-
-        if transaction_search and "transaction_id" in filtered.columns:
-            filtered = filtered[
-                filtered["transaction_id"].astype(str)
-                .str.contains(transaction_search, case=False, na=False)
-            ]
-
-    st.write(f"**Matching transactions:** {len(filtered):,}")
+    st.subheader("Recent Transactions")
 
     st.dataframe(
-        filtered,
-        width="stretch",
-        hide_index=True
-    )
-
-    csv_data = filtered.to_csv(index=False).encode("utf-8")
-
-    st.download_button(
-        "📥 Download Filtered CSV",
-        data=csv_data,
-        file_name="upi_filtered_transactions.csv",
-        mime="text/csv",
+        df.sort_values(
+            "transaction_time",
+            ascending=False
+        ).head(10),
         width="stretch"
     )
 
 
-# ---------------- PAGE: ABOUT ----------------
+# --------------------------------------------------
+# LIVE PREDICTION
+# --------------------------------------------------
 
-elif page == "About Project":
+elif page == "Live Prediction":
 
-    st.markdown(
-        '<div class="main-title">ℹ️ About This Project</div>',
-        unsafe_allow_html=True
+    st.title("Live Transaction Risk Prediction")
+
+    st.info(
+        "Enter historical transaction information and transaction details."
     )
 
-    st.markdown("""
-    ### UPI Fraud Detection using Machine Learning
-
-    **Objective:** Explore transaction patterns and flag potentially
-    unusual transactions for further review.
-
-    **Technology stack**
-    - Python
-    - Pandas
-    - Scikit-learn
-    - Isolation Forest
-    - Streamlit
-    - Plotly
-
-    **Features**
-    - Transaction analytics dashboard
-    - Location and merchant analysis
-    - Interactive transaction explorer
-    - CSV report export
-    - Live anomaly scoring using the saved model
-
-    **Limitations**
-
-    This project uses synthetic data. Its results do not establish
-    real-world fraud detection performance. The live prediction page
-    accepts manually entered values and does not connect to a payment
-    provider or bank.
-    """)
-
-# ---------------- PAGE: MODEL PERFORMANCE ----------------
-
-elif page == "Model Performance":
-
-    st.markdown(
-        '<div class="main-title">📊 Model Performance</div>',
-        unsafe_allow_html=True
+    model_name = st.selectbox(
+        "Select Model",
+        ["random_forest", "logistic_regression"]
     )
-
-    st.markdown(
-        '<div class="subtitle">'
-        'Evaluate Isolation Forest on a held-out test set'
-        '</div>',
-        unsafe_allow_html=True
-    )
-
-    if model is None:
-        st.error("Trained model load nahi hua.")
-        st.stop()
-
-    required_features = [
-        "amount",
-        "hour",
-        "amount_deviation",
-        "transactions_last_hour"
-    ]
-
-    missing_features = [
-        feature for feature in required_features
-        if feature not in df.columns
-    ]
-
-    if missing_features:
-        st.error(
-            "Performance calculate karne ke liye CSV mein ye "
-            f"features missing hain: {missing_features}"
-        )
-        st.info(
-            "Pehle original Colab notebook se in features ko "
-            "reconstruct karke CSV mein save karna hoga."
-        )
-        st.stop()
-
-    if "is_fraud" not in df.columns:
-        st.error(
-            "CSV mein is_fraud label missing hai. "
-            "Actual test evaluation ke liye labelled data zaroori hai."
-        )
-        st.stop()
-
-    X = (
-        df[required_features]
-        .replace([float("inf"), float("-inf")], 0)
-        .fillna(0)
-    )
-
-    y = df["is_fraud"].astype(int)
-
-    X_train, X_test, y_train, y_test = train_test_split(
-        X,
-        y,
-        test_size=0.20,
-        random_state=42,
-        stratify=y
-    )
-
-    # Model was originally trained on the training split.
-    # Do not fit it on the test data.
-    predictions = model.predict(X_test)
-
-    # Isolation Forest: -1 means anomaly, +1 means normal.
-    y_pred = (predictions == -1).astype(int)
-
-    accuracy = accuracy_score(y_test, y_pred)
-    report = classification_report(
-        y_test,
-        y_pred,
-        labels=[0, 1],
-        target_names=["Normal", "Fraud"],
-        output_dict=True,
-        zero_division=0
-    )
-
-    precision = report["Fraud"]["precision"]
-    recall = report["Fraud"]["recall"]
-    f1 = report["Fraud"]["f1-score"]
-
-    c1, c2, c3, c4 = st.columns(4)
-
-    with c1:
-        st.metric("Accuracy", f"{accuracy:.1%}")
-
-    with c2:
-        st.metric("Fraud Precision", f"{precision:.1%}")
-
-    with c3:
-        st.metric("Fraud Recall", f"{recall:.1%}")
-
-    with c4:
-        st.metric("Fraud F1-score", f"{f1:.1%}")
-
-    st.caption(
-        f"Evaluation uses {len(X_test):,} held-out test transactions. "
-        "Results are specific to this synthetic dataset."
-    )
-
-    st.divider()
 
     col1, col2 = st.columns(2)
 
     with col1:
-        st.subheader("Confusion Matrix")
 
-        cm = confusion_matrix(
-            y_test,
-            y_pred,
-            labels=[0, 1]
+        amount = st.number_input(
+            "Transaction Amount (₹)",
+            min_value=0.0,
+            value=15000.0
         )
 
-        fig, ax = plt.subplots()
-        display = ConfusionMatrixDisplay(
-            confusion_matrix=cm,
-            display_labels=["Normal", "Fraud"]
+        hour = st.slider(
+            "Transaction Hour",
+            0, 23, 22
         )
-        display.plot(ax=ax, values_format="d", colorbar=False)
-        ax.set_title("Actual vs Predicted")
-        st.pyplot(fig)
-        plt.close(fig)
+
+        user_avg = st.number_input(
+            "User's Previous Average Amount",
+            min_value=0.0,
+            value=3000.0
+        )
+
+        previous_count = st.number_input(
+            "Previous Transaction Count",
+            min_value=0,
+            value=10
+        )
 
     with col2:
-        st.subheader("Classification Report")
 
-        report_df = pd.DataFrame(report).transpose()
+        last_hour = st.number_input(
+            "Transactions in Previous Hour",
+            min_value=0,
+            value=2
+        )
+
+        merchant = st.selectbox(
+            "Merchant Category",
+            sorted(df["merchant_category"].dropna().astype(str).unique())
+        )
+
+        device = st.selectbox(
+            "Device Type",
+            sorted(df["device_type"].dropna().astype(str).unique())
+        )
+
+        location = st.selectbox(
+            "Location",
+            sorted(df["location"].dropna().astype(str).unique())
+        )
+
+        weekend = st.selectbox(
+            "Is Weekend?",
+            [0, 1],
+            format_func=lambda x: "Yes" if x == 1 else "No"
+        )
+
+    if st.button(
+        "Analyze Transaction",
+        type="primary",
+        width="stretch"
+    ):
+
+        model_path = MODEL_DIR / f"{model_name}.joblib"
+
+        if not model_path.exists():
+
+            st.error("Selected model file not found.")
+
+        else:
+
+            from src.predict import predict_transaction
+
+            try:
+
+                result = predict_transaction(
+                    amount=amount,
+                    hour=hour,
+                    user_avg_amount_prior=user_avg,
+                    user_transaction_count_prior=previous_count,
+                    transactions_last_hour=last_hour,
+                    merchant_category=merchant,
+                    device_type=device,
+                    location=location,
+                    is_weekend=weekend,
+                    model_name=model_name
+                )
+
+                st.divider()
+
+                st.subheader("Prediction Result")
+
+                c1, c2 = st.columns(2)
+
+                c1.metric(
+                    "Risk Score",
+                    f"{result['risk_score']:.2f}%"
+                )
+
+                c2.metric(
+                    "Risk Level",
+                    result["risk_level"]
+                )
+
+                if result["prediction"] == 1:
+
+                    st.error(
+                        "⚠️ Model flagged this transaction as potentially fraudulent."
+                    )
+
+                else:
+
+                    st.success(
+                        "Model did not flag this transaction as fraud."
+                    )
+
+                st.caption(
+                    "This is a model-generated risk estimate, not a confirmed fraud decision."
+                )
+
+            except Exception as error:
+
+                st.error(f"Prediction failed: {error}")
+
+
+# --------------------------------------------------
+# MODEL PERFORMANCE
+# --------------------------------------------------
+
+elif page == "Model Performance":
+
+    st.title("Model Performance & Comparison")
+
+    test_path = BASE_DIR / "data" / "processed" / "test_data.csv"
+
+    if not test_path.exists():
+
+        st.warning(
+            "Test dataset not found. Run python -m src.train first."
+        )
+
+        st.stop()
+
+    test_df = pd.read_csv(test_path)
+
+    test_df["transaction_time"] = pd.to_datetime(
+        test_df["transaction_time"]
+    )
+
+    model_names = [
+        "logistic_regression",
+        "random_forest"
+    ]
+
+    results = []
+
+    for model_name in model_names:
+
+        saved_path = MODEL_DIR / f"{model_name}.joblib"
+
+        if not saved_path.exists():
+            continue
+
+        saved = joblib.load(saved_path)
+
+        model = saved["model"]
+
+        features = saved["feature_columns"]
+
+        X_test = test_df[features]
+
+        y_test = test_df["is_fraud"].astype(int)
+
+        predictions = model.predict(X_test)
+
+        probabilities = model.predict_proba(X_test)[:, 1]
+
+        results.append({
+
+            "Model": model_name,
+
+            "Accuracy": accuracy_score(
+                y_test, predictions
+            ),
+
+            "Precision": precision_score(
+                y_test, predictions, zero_division=0
+            ),
+
+            "Recall": recall_score(
+                y_test, predictions, zero_division=0
+            ),
+
+            "F1 Score": f1_score(
+                y_test, predictions, zero_division=0
+            ),
+
+            "PR-AUC": average_precision_score(
+                y_test, probabilities
+            )
+
+        })
+
+    if not results:
+
+        st.error("No trained models found.")
+
+        st.stop()
+
+    comparison = pd.DataFrame(results)
+
+    st.subheader("Model Comparison")
+
+    st.dataframe(
+        comparison.style.format({
+            "Accuracy": "{:.2%}",
+            "Precision": "{:.2%}",
+            "Recall": "{:.2%}",
+            "F1 Score": "{:.2%}",
+            "PR-AUC": "{:.4f}"
+        }),
+        width="stretch"
+    )
+
+    metric = st.selectbox(
+        "Compare Metric",
+        [
+            "Accuracy",
+            "Precision",
+            "Recall",
+            "F1 Score",
+            "PR-AUC"
+        ]
+    )
+
+    fig = px.bar(
+        comparison,
+        x="Model",
+        y=metric,
+        title=f"Model Comparison - {metric}",
+        text_auto=".3f"
+    )
+
+    st.plotly_chart(fig, width="stretch")
+
+    selected_model = st.selectbox(
+        "View Confusion Matrix",
+        model_names
+    )
+
+    selected_path = MODEL_DIR / f"{selected_model}.joblib"
+
+    saved = joblib.load(selected_path)
+
+    model = saved["model"]
+
+    features = saved["feature_columns"]
+
+    predictions = model.predict(test_df[features])
+
+    matrix = confusion_matrix(
+        test_df["is_fraud"],
+        predictions,
+        labels=[0, 1]
+    )
+
+    matrix_df = pd.DataFrame(
+        matrix,
+        index=["Actual Legitimate", "Actual Fraud"],
+        columns=["Predicted Legitimate", "Predicted Fraud"]
+    )
+
+    st.subheader("Confusion Matrix")
+
+    st.dataframe(matrix_df, width="stretch")
+
+    st.download_button(
+        "Download Model Comparison",
+        comparison.to_csv(index=False),
+        file_name="model_comparison.csv",
+        mime="text/csv"
+    )
+
+
+# --------------------------------------------------
+# TRANSACTIONS
+# --------------------------------------------------
+
+elif page == "Transactions":
+
+    st.title("Transaction Explorer")
+
+    search = st.text_input(
+        "Search Transaction ID"
+    )
+
+    locations = sorted(
+        df["location"].dropna().astype(str).unique()
+    )
+
+    selected_location = st.multiselect(
+        "Filter by Location",
+        locations
+    )
+
+    categories = sorted(
+        df["merchant_category"].dropna().astype(str).unique()
+    )
+
+    selected_category = st.multiselect(
+        "Merchant Category",
+        categories
+    )
+
+    status = st.selectbox(
+        "Fraud Label",
+        ["All", "Legitimate", "Fraud"]
+    )
+
+    filtered = df.copy()
+
+    if search:
+
+        filtered = filtered[
+            filtered["transaction_id"].astype(str)
+            .str.contains(search, case=False, na=False)
+        ]
+
+    if selected_location:
+
+        filtered = filtered[
+            filtered["location"].astype(str)
+            .isin(selected_location)
+        ]
+
+    if selected_category:
+
+        filtered = filtered[
+            filtered["merchant_category"].astype(str)
+            .isin(selected_category)
+        ]
+
+    if status == "Legitimate":
+
+        filtered = filtered[
+            filtered["is_fraud"] == 0
+        ]
+
+    elif status == "Fraud":
+
+        filtered = filtered[
+            filtered["is_fraud"] == 1
+        ]
+
+    st.metric(
+        "Filtered Transactions",
+        len(filtered)
+    )
+
+    st.dataframe(
+        filtered,
+        width="stretch"
+    )
+
+    st.download_button(
+        "Download Filtered Transactions",
+        filtered.to_csv(index=False),
+        file_name="filtered_transactions.csv",
+        mime="text/csv"
+    )
+
+
+# --------------------------------------------------
+# FRAUD ANALYSIS
+# --------------------------------------------------
+
+elif page == "Fraud Analysis":
+
+    st.title("Fraud & Anomaly Analysis")
+
+    fraud_df = df[df["is_fraud"] == 1]
+
+    normal_df = df[df["is_fraud"] == 0]
+
+    c1, c2, c3 = st.columns(3)
+
+    c1.metric("Fraud-labelled Transactions", len(fraud_df))
+
+    c2.metric("Legitimate Transactions", len(normal_df))
+
+    c3.metric(
+        "Average Fraud-labelled Amount",
+        f"₹{fraud_df['amount'].mean():,.2f}"
+        if len(fraud_df) else "₹0"
+    )
+
+    st.subheader("Fraud vs Legitimate Amounts")
+
+    amount_data = df.copy()
+
+    amount_data["Label"] = amount_data[
+        "is_fraud"
+    ].map({
+        0: "Legitimate",
+        1: "Fraud"
+    })
+
+    fig = px.box(
+        amount_data,
+        x="Label",
+        y="amount",
+        color="Label"
+    )
+
+    st.plotly_chart(fig, width="stretch")
+
+    st.subheader("Anomaly Detection Flags")
+
+    flag_columns = [
+        col for col in [
+            "iqr_flag",
+            "if_flag",
+            "if_flag_tuned",
+            "if_flag_v2"
+        ]
+        if col in df.columns
+    ]
+
+    if flag_columns:
+
+        flag_summary = pd.DataFrame({
+
+            "Detection Method": flag_columns,
+
+            "Flagged Transactions": [
+                pd.to_numeric(
+                    df[col], errors="coerce"
+                ).fillna(0).astype(int).sum()
+                for col in flag_columns
+            ]
+
+        })
+
+        fig = px.bar(
+            flag_summary,
+            x="Detection Method",
+            y="Flagged Transactions",
+            text="Flagged Transactions"
+        )
+
+        st.plotly_chart(fig, width="stretch")
+
         st.dataframe(
-            report_df.round(3),
+            flag_summary,
             width="stretch"
         )
 
-    st.subheader("Interpretation")
-
-    st.write(
-        f"- **Precision:** {precision:.1%} of transactions flagged "
-        "by the model were labelled fraud in the test data."
+    st.caption(
+        "Anomaly flags are separate from the synthetic is_fraud target label."
     )
 
-    st.write(
-        f"- **Recall:** The model detected {recall:.1%} of the "
-        "labelled fraud transactions in the test data."
+
+# --------------------------------------------------
+# ABOUT PROJECT
+# --------------------------------------------------
+
+elif page == "About Project":
+
+    st.title("About UPI Fraud Intelligence")
+
+    st.markdown("""
+    ### Project Overview
+
+    This project demonstrates a machine learning workflow
+    for analyzing synthetic UPI transactions.
+
+    ### Machine Learning Models
+
+    - Logistic Regression
+    - Random Forest
+
+    ### Feature Engineering
+
+    - Transaction amount
+    - Transaction hour
+    - Cyclical time features
+    - Historical user average amount
+    - Amount deviation
+    - Previous transaction count
+    - Transactions in the previous hour
+    - Merchant category
+    - Device type
+    - Location
+
+    ### Evaluation Metrics
+
+    - Accuracy
+    - Precision
+    - Recall
+    - F1 Score
+    - PR-AUC
+    - Confusion Matrix
+
+    ### Limitations
+
+    - Dataset is synthetic.
+    - Labels do not represent verified bank fraud.
+    - Model predictions are experimental.
+    - This project is not intended for production financial decisions.
+    """)
+
+    st.info(
+        "Developed as a Data Science and Machine Learning portfolio project."
     )
 
-    st.write(
-        f"- **F1-score:** The combined precision-recall score is "
-        f"{f1:.1%}."
-    )
 
-    st.warning(
-        "This evaluation is valid only if the saved model was trained "
-        "on the same training split and feature definitions. If the "
-        "model was retrained on a different split, retrain and evaluate "
-        "it consistently before reporting these metrics."
-    )
+# --------------------------------------------------
+# FOOTER
+# --------------------------------------------------
+
+st.sidebar.divider()
+
+st.sidebar.caption(
+    "UPI Fraud Intelligence | Machine Learning Portfolio Project"
+)
