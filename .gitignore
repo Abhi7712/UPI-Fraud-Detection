@@ -1,6 +1,14 @@
 __pycache__/
-*.pyc
-.env
+*.py[cod]
+.pytest_cache/
 .venv/
 venv/
+.env
 .streamlit/secrets.toml
+.DS_Store
+Thumbs.db
+
+# Local prediction history database
+data/processed/*.db
+data/processed/*.db-shm
+data/processed/*.db-wal

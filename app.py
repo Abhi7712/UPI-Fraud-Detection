@@ -84,10 +84,31 @@ def load_data():
         errors="coerce"
     ).fillna(0).astype(int)
 
-    df["is_suspicious"] = (
-        df["if_flag_v2"].astype(str).str.lower()
-        .isin(["1", "true", "yes"])
-    )
+    required_columns = [
+        "transaction_id", "user_id", "amount", "transaction_time",
+        "merchant_category", "device_type", "location", "is_fraud"
+    ]
+    missing = [column for column in required_columns if column not in df.columns]
+    if missing:
+        raise ValueError(f"Dataset is missing required columns: {missing}")
+
+    df = df.dropna(subset=["transaction_time", "amount", "is_fraud"]).copy()
+    df["is_fraud"] = df["is_fraud"].astype(int)
+    if not df["is_fraud"].isin([0, 1]).all():
+        raise ValueError("is_fraud must contain only 0 and 1.")
+
+    # Derive hour if an input CSV does not already contain it.
+    if "hour" not in df.columns:
+        df["hour"] = df["transaction_time"].dt.hour
+
+    # Keep anomaly flags separate from the fraud target label.
+    if "if_flag_v2" in df.columns:
+        df["is_suspicious"] = (
+            df["if_flag_v2"].astype(str).str.lower()
+            .isin(["1", "true", "yes"])
+        )
+    else:
+        df["is_suspicious"] = False
 
     return df
 
@@ -117,7 +138,9 @@ page = st.sidebar.radio(
     "Navigation",
     [
         "Overview",
-        "Live Prediction",
+        "Check Transaction",
+        "Bulk CSV Detection",
+        "Prediction History",
         "Model Performance",
         "Transactions",
         "Fraud Analysis",
@@ -260,147 +283,321 @@ if page == "Overview":
 
 
 # --------------------------------------------------
-# LIVE PREDICTION
+# CHECK SINGLE TRANSACTION
 # --------------------------------------------------
 
-elif page == "Live Prediction":
+elif page == "Check Transaction":
 
-    st.title("Live Transaction Risk Prediction")
+    st.title("Check a UPI Transaction")
+    st.write(
+        "Enter a transaction and the user's historical activity. "
+        "The model will classify it as FRAUD or NOT FRAUD."
+    )
 
-    st.info(
-        "Enter historical transaction information and transaction details."
+    st.warning(
+        "Demonstration only: this project uses synthetic data and is not connected "
+        "to a bank, UPI app, or live payment network."
     )
 
     model_name = st.selectbox(
-        "Select Model",
+        "Machine Learning Model",
         ["random_forest", "logistic_regression"]
     )
 
-    col1, col2 = st.columns(2)
+    with st.form("single_transaction_form"):
+        left, right = st.columns(2)
 
-    with col1:
+        with left:
+            amount = st.number_input(
+                "Transaction Amount (₹)", min_value=0.0,
+                value=1500.0, step=100.0
+            )
+            hour = st.slider("Transaction Hour", 0, 23, 14)
+            user_avg = st.number_input(
+                "User's Previous Average Amount (₹)",
+                min_value=0.0, value=1200.0, step=100.0
+            )
+            previous_count = st.number_input(
+                "Previous Transaction Count",
+                min_value=0, value=10, step=1
+            )
 
-        amount = st.number_input(
-            "Transaction Amount (₹)",
-            min_value=0.0,
-            value=15000.0
+        with right:
+            last_hour = st.number_input(
+                "Transactions in Previous Hour",
+                min_value=0, value=1, step=1
+            )
+            merchant = st.selectbox(
+                "Merchant Category",
+                sorted(df["merchant_category"].dropna().astype(str).unique())
+            )
+            device = st.selectbox(
+                "Device Type",
+                sorted(df["device_type"].dropna().astype(str).unique())
+            )
+            location = st.selectbox(
+                "Location",
+                sorted(df["location"].dropna().astype(str).unique())
+            )
+            weekend = st.selectbox(
+                "Is Weekend?", [0, 1],
+                format_func=lambda x: "Yes" if x == 1 else "No"
+            )
+
+        submitted = st.form_submit_button(
+            "Check Transaction", type="primary", use_container_width=True
         )
 
-        hour = st.slider(
-            "Transaction Hour",
-            0, 23, 22
-        )
+    if submitted:
+        from src.predict import predict_transaction
+        from src.storage import save_prediction
 
-        user_avg = st.number_input(
-            "User's Previous Average Amount",
-            min_value=0.0,
-            value=3000.0
-        )
+        transaction = {
+            "amount": amount,
+            "hour": hour,
+            "user_avg_amount_prior": user_avg,
+            "user_transaction_count_prior": previous_count,
+            "transactions_last_hour": last_hour,
+            "merchant_category": merchant,
+            "device_type": device,
+            "location": location,
+            "is_weekend": weekend
+        }
 
-        previous_count = st.number_input(
-            "Previous Transaction Count",
-            min_value=0,
-            value=10
-        )
+        try:
+            result = predict_transaction(
+                amount=amount,
+                hour=hour,
+                user_avg_amount_prior=user_avg,
+                user_transaction_count_prior=previous_count,
+                transactions_last_hour=last_hour,
+                merchant_category=merchant,
+                device_type=device,
+                location=location,
+                is_weekend=weekend,
+                model_name=model_name
+            )
+            history_id = save_prediction(transaction, result)
 
-    with col2:
+            st.session_state["last_prediction"] = result
+            st.session_state["last_prediction_id"] = history_id
 
-        last_hour = st.number_input(
-            "Transactions in Previous Hour",
-            min_value=0,
-            value=2
-        )
+        except Exception as error:
+            st.error(f"Prediction failed: {error}")
+            st.stop()
 
-        merchant = st.selectbox(
-            "Merchant Category",
-            sorted(df["merchant_category"].dropna().astype(str).unique())
-        )
+    result = st.session_state.get("last_prediction")
+    if result:
+        st.divider()
+        st.subheader("Transaction Decision")
 
-        device = st.selectbox(
-            "Device Type",
-            sorted(df["device_type"].dropna().astype(str).unique())
-        )
-
-        location = st.selectbox(
-            "Location",
-            sorted(df["location"].dropna().astype(str).unique())
-        )
-
-        weekend = st.selectbox(
-            "Is Weekend?",
-            [0, 1],
-            format_func=lambda x: "Yes" if x == 1 else "No"
-        )
-
-    if st.button(
-        "Analyze Transaction",
-        type="primary",
-        width="stretch"
-    ):
-
-        model_path = MODEL_DIR / f"{model_name}.joblib"
-
-        if not model_path.exists():
-
-            st.error("Selected model file not found.")
-
+        if result["prediction"] == 1:
+            st.error("🚨 FRAUD — The model flagged this transaction as potentially fraudulent.")
         else:
+            st.success("✅ NOT FRAUD — The model did not flag this transaction as fraud.")
 
-            from src.predict import predict_transaction
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Model Score (uncalibrated)", f"{result['model_score']:.2f}%")
+        c2.metric("Risk Band", result["risk_level"])
+        c3.metric("Model", result["model"].replace("_", " ").title())
 
-            try:
+        st.caption(
+            "Model score is not a calibrated fraud probability. "
+            "The model's decision and the illustrative risk band are different outputs."
+        )
 
-                result = predict_transaction(
-                    amount=amount,
-                    hour=hour,
-                    user_avg_amount_prior=user_avg,
-                    user_transaction_count_prior=previous_count,
-                    transactions_last_hour=last_hour,
-                    merchant_category=merchant,
-                    device_type=device,
-                    location=location,
-                    is_weekend=weekend,
-                    model_name=model_name
-                )
+        st.subheader("Why was it flagged?")
+        for signal in result["signals"]:
+            st.warning(signal)
 
-                st.divider()
-
-                st.subheader("Prediction Result")
-
-                c1, c2 = st.columns(2)
-
-                c1.metric(
-                    "Risk Score",
-                    f"{result['risk_score']:.2f}%"
-                )
-
-                c2.metric(
-                    "Risk Level",
-                    result["risk_level"]
-                )
-
-                if result["prediction"] == 1:
-
-                    st.error(
-                        "⚠️ Model flagged this transaction as potentially fraudulent."
-                    )
-
-                else:
-
-                    st.success(
-                        "Model did not flag this transaction as fraud."
-                    )
-
-                st.caption(
-                    "This is a model-generated risk estimate, not a confirmed fraud decision."
-                )
-
-            except Exception as error:
-
-                st.error(f"Prediction failed: {error}")
+        st.caption(
+            f"Saved to local prediction history as record #{st.session_state.get('last_prediction_id', '—')}."
+        )
 
 
 # --------------------------------------------------
+# BULK CSV DETECTION
+# --------------------------------------------------
+
+elif page == "Bulk CSV Detection":
+
+    st.title("Bulk UPI Transaction Detection")
+    st.write("Upload a CSV containing one transaction per row to classify multiple transactions.")
+
+    required_input_columns = [
+        "amount",
+        "hour",
+        "user_avg_amount_prior",
+        "user_transaction_count_prior",
+        "transactions_last_hour",
+        "merchant_category",
+        "device_type",
+        "location",
+        "is_weekend"
+    ]
+
+    template = pd.DataFrame([{
+        "amount": 2500,
+        "hour": 14,
+        "user_avg_amount_prior": 1200,
+        "user_transaction_count_prior": 10,
+        "transactions_last_hour": 1,
+        "merchant_category": "Shopping",
+        "device_type": "Android",
+        "location": "Delhi",
+        "is_weekend": 0
+    }])
+
+    st.download_button(
+        "Download CSV Template",
+        template.to_csv(index=False),
+        file_name="upi_transaction_input_template.csv",
+        mime="text/csv"
+    )
+
+    model_name = st.selectbox(
+        "Select Model for Bulk Detection",
+        ["random_forest", "logistic_regression"],
+        key="bulk_model"
+    )
+
+    uploaded_file = st.file_uploader(
+        "Upload transaction CSV",
+        type=["csv"]
+    )
+
+    if uploaded_file is not None:
+        try:
+            upload_df = pd.read_csv(uploaded_file)
+            missing = [c for c in required_input_columns if c not in upload_df.columns]
+
+            if missing:
+                st.error(f"Missing required columns: {', '.join(missing)}")
+            elif upload_df.empty:
+                st.warning("The uploaded CSV has no transaction rows.")
+            else:
+                st.dataframe(upload_df.head(10), use_container_width=True)
+                st.caption(f"{len(upload_df):,} transaction rows found.")
+
+                if st.button("Analyze All Transactions", type="primary"):
+                    from src.predict import predict_transaction
+                    from src.storage import save_prediction
+
+                    output_rows = []
+                    progress = st.progress(0)
+
+                    for index, row in upload_df.iterrows():
+                        try:
+                            transaction = {
+                                "amount": float(row["amount"]),
+                                "hour": float(row["hour"]),
+                                "user_avg_amount_prior": float(row["user_avg_amount_prior"]),
+                                "user_transaction_count_prior": float(row["user_transaction_count_prior"]),
+                                "transactions_last_hour": float(row["transactions_last_hour"]),
+                                "merchant_category": row["merchant_category"],
+                                "device_type": row["device_type"],
+                                "location": row["location"],
+                                "is_weekend": float(row["is_weekend"])
+                            }
+
+                            prediction = predict_transaction(
+                                **transaction,
+                                model_name=model_name
+                            )
+                            save_prediction(transaction, prediction)
+
+                            output_rows.append({
+                                **transaction,
+                                "prediction": "FRAUD" if prediction["prediction"] == 1 else "NOT FRAUD",
+                                "model_score_percent": prediction["model_score"],
+                                "risk_level": prediction["risk_level"],
+                                "signals": " | ".join(prediction["signals"]),
+                                "error": ""
+                            })
+                        except Exception as row_error:
+                            output_rows.append({
+                                **row.to_dict(),
+                                "prediction": "NOT PROCESSED",
+                                "model_score_percent": None,
+                                "risk_level": "Unavailable",
+                                "signals": "",
+                                "error": str(row_error)
+                            })
+
+                        progress.progress((index + 1) / len(upload_df))
+
+                    result_df = pd.DataFrame(output_rows)
+                    st.session_state["bulk_prediction_results"] = result_df
+
+                result_df = st.session_state.get("bulk_prediction_results")
+                if result_df is not None:
+                    fraud_count = int((result_df["prediction"] == "FRAUD").sum())
+                    normal_count = int((result_df["prediction"] == "NOT FRAUD").sum())
+                    failed_count = int((result_df["prediction"] == "NOT PROCESSED").sum())
+
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Flagged as Fraud", fraud_count)
+                    c2.metric("Not Flagged", normal_count)
+                    c3.metric("Processing Errors", failed_count)
+
+                    st.dataframe(result_df, use_container_width=True, hide_index=True)
+                    st.download_button(
+                        "Download Prediction Results",
+                        result_df.to_csv(index=False),
+                        file_name="upi_fraud_predictions.csv",
+                        mime="text/csv"
+                    )
+
+        except Exception as error:
+            st.error(f"Could not read CSV: {error}")
+
+
+# --------------------------------------------------
+# PREDICTION HISTORY
+# --------------------------------------------------
+
+elif page == "Prediction History":
+
+    st.title("Prediction History")
+    st.caption("Predictions made through the single-transaction and bulk-checker pages are stored locally.")
+
+    from src.storage import get_prediction_history, clear_prediction_history
+
+    history = get_prediction_history(limit=1000)
+
+    if not history:
+        st.info("No predictions saved yet. Use Check Transaction or Bulk CSV Detection first.")
+    else:
+        history_df = pd.DataFrame(history)
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total Checked", len(history_df))
+        c2.metric("Flagged as Fraud", int((history_df["prediction"] == 1).sum()))
+        c3.metric("Not Flagged", int((history_df["prediction"] == 0).sum()))
+
+        display_cols = [
+            "id", "checked_at", "amount", "result", "model",
+            "model_score", "risk_level", "merchant_category",
+            "device_type", "location"
+        ]
+        st.dataframe(
+            history_df[display_cols],
+            use_container_width=True,
+            hide_index=True
+        )
+
+        st.download_button(
+            "Download Prediction History",
+            history_df.drop(columns=["signals"], errors="ignore").to_csv(index=False),
+            file_name="upi_prediction_history.csv",
+            mime="text/csv"
+        )
+
+        if st.button("Clear Local Prediction History", type="secondary"):
+            clear_prediction_history()
+            st.rerun()
+
+
 # MODEL PERFORMANCE
 # --------------------------------------------------
 
@@ -408,85 +605,48 @@ elif page == "Model Performance":
 
     st.title("Model Performance & Comparison")
 
-    test_path = BASE_DIR / "data" / "processed" / "test_data.csv"
+    st.caption(
+        "Compare supervised classification and unsupervised anomaly detection models."
+    )
 
-    if not test_path.exists():
+    comparison_path = REPORT_DIR / "model_comparison.csv"
+    matrix_path = REPORT_DIR / "confusion_matrices.csv"
+
+    if not comparison_path.exists() or not matrix_path.exists():
 
         st.warning(
-            "Test dataset not found. Run python -m src.train first."
+            "Evaluation reports not found. Run: python -m src.evaluate"
         )
 
         st.stop()
 
-    test_df = pd.read_csv(test_path)
+    comparison = pd.read_csv(comparison_path)
+    matrices_df = pd.read_csv(matrix_path)
 
-    test_df["transaction_time"] = pd.to_datetime(
-        test_df["transaction_time"]
-    )
+    if comparison.empty:
 
-    model_names = [
-        "logistic_regression",
-        "random_forest"
-    ]
-
-    results = []
-
-    for model_name in model_names:
-
-        saved_path = MODEL_DIR / f"{model_name}.joblib"
-
-        if not saved_path.exists():
-            continue
-
-        saved = joblib.load(saved_path)
-
-        model = saved["model"]
-
-        features = saved["feature_columns"]
-
-        X_test = test_df[features]
-
-        y_test = test_df["is_fraud"].astype(int)
-
-        predictions = model.predict(X_test)
-
-        probabilities = model.predict_proba(X_test)[:, 1]
-
-        results.append({
-
-            "Model": model_name,
-
-            "Accuracy": accuracy_score(
-                y_test, predictions
-            ),
-
-            "Precision": precision_score(
-                y_test, predictions, zero_division=0
-            ),
-
-            "Recall": recall_score(
-                y_test, predictions, zero_division=0
-            ),
-
-            "F1 Score": f1_score(
-                y_test, predictions, zero_division=0
-            ),
-
-            "PR-AUC": average_precision_score(
-                y_test, probabilities
-            )
-
-        })
-
-    if not results:
-
-        st.error("No trained models found.")
-
+        st.error("Model comparison report is empty.")
         st.stop()
 
-    comparison = pd.DataFrame(results)
+    # -------------------------------
+    # MODEL COMPARISON TABLE
+    # -------------------------------
 
     st.subheader("Model Comparison")
+
+    display_columns = [
+        "Model",
+        "Accuracy",
+        "Precision",
+        "Recall",
+        "F1 Score",
+        "PR-AUC",
+        "Fraud Detected",
+        "False Positives",
+        "Missed Fraud"
+    ]
+
+    comparison = comparison[display_columns]
 
     st.dataframe(
         comparison.style.format({
@@ -496,11 +656,57 @@ elif page == "Model Performance":
             "F1 Score": "{:.2%}",
             "PR-AUC": "{:.4f}"
         }),
-        width="stretch"
+        width="stretch",
+        hide_index=True
     )
 
+    # -------------------------------
+    # BEST SUPERVISED MODEL
+    # -------------------------------
+
+    supervised = comparison[
+        comparison["Model"].isin([
+            "logistic_regression",
+            "random_forest"
+        ])
+    ]
+
+    if not supervised.empty:
+
+        best_model = supervised.sort_values(
+            "F1 Score",
+            ascending=False
+        ).iloc[0]
+
+        st.subheader("Best Supervised Model")
+
+        c1, c2, c3 = st.columns(3)
+
+        c1.metric(
+            "Model",
+            best_model["Model"].replace("_", " ").title()
+        )
+
+        c2.metric(
+            "F1 Score",
+            f"{best_model['F1 Score']:.2%}"
+        )
+
+        c3.metric(
+            "Precision",
+            f"{best_model['Precision']:.2%}"
+        )
+
+    st.divider()
+
+    # -------------------------------
+    # METRIC COMPARISON CHART
+    # -------------------------------
+
+    st.subheader("Performance Metrics")
+
     metric = st.selectbox(
-        "Compare Metric",
+        "Select Evaluation Metric",
         [
             "Accuracy",
             "Precision",
@@ -514,49 +720,175 @@ elif page == "Model Performance":
         comparison,
         x="Model",
         y=metric,
-        title=f"Model Comparison - {metric}",
-        text_auto=".3f"
+        color="Model",
+        text_auto=".3f",
+        title=f"Model Comparison - {metric}"
+    )
+
+    fig.update_layout(
+        xaxis_title="Machine Learning Model",
+        yaxis_title=metric,
+        showlegend=False,
+        xaxis_tickangle=-30
     )
 
     st.plotly_chart(fig, width="stretch")
 
+    # -------------------------------
+    # ISOLATION FOREST ANALYSIS
+    # -------------------------------
+
+    st.divider()
+
+    st.subheader("Isolation Forest - Contamination Analysis")
+
+    isolation_df = comparison[
+        comparison["Model"].str.startswith(
+            "isolation_forest",
+            na=False
+        )
+    ].copy()
+
+    if not isolation_df.empty:
+
+        isolation_df["Contamination"] = (
+            isolation_df["Model"]
+            .str.replace("isolation_forest_", "", regex=False)
+            .str.replace("_", ".", regex=False)
+            .astype(float)
+        )
+
+        isolation_df = isolation_df.sort_values(
+            "Contamination"
+        )
+
+        selected_if_metric = st.selectbox(
+            "Select Isolation Forest Metric",
+            [
+                "Precision",
+                "Recall",
+                "F1 Score",
+                "Accuracy",
+                "False Positives"
+            ],
+            key="if_metric"
+        )
+
+        fig = px.line(
+            isolation_df,
+            x="Contamination",
+            y=selected_if_metric,
+            markers=True,
+            text=selected_if_metric,
+            title=f"Contamination vs {selected_if_metric}"
+        )
+
+        fig.update_traces(textposition="top center")
+
+        st.plotly_chart(fig, width="stretch")
+
+        st.dataframe(
+            isolation_df[
+                [
+                    "Contamination",
+                    "Precision",
+                    "Recall",
+                    "F1 Score",
+                    "PR-AUC",
+                    "Fraud Detected",
+                    "False Positives",
+                    "Missed Fraud"
+                ]
+            ].style.format({
+                "Contamination": "{:.2f}",
+                "Precision": "{:.2%}",
+                "Recall": "{:.2%}",
+                "F1 Score": "{:.2%}",
+                "PR-AUC": "{:.4f}"
+            }),
+            width="stretch",
+            hide_index=True
+        )
+
+        st.info(
+            "Higher contamination increases the number of transactions "
+            "flagged as anomalies. It can improve recall but may also "
+            "increase false positives. PR-AUC measures ranking quality "
+            "and is not improved simply by changing the prediction threshold."
+        )
+
+    # -------------------------------
+    # CONFUSION MATRIX
+    # -------------------------------
+
+    st.divider()
+
+    st.subheader("Confusion Matrix")
+
+    available_models = matrices_df["Model"].tolist()
+
     selected_model = st.selectbox(
-        "View Confusion Matrix",
-        model_names
+        "Select Model for Confusion Matrix",
+        available_models,
+        key="matrix_model"
     )
 
-    selected_path = MODEL_DIR / f"{selected_model}.joblib"
+    selected_matrix = matrices_df[
+        matrices_df["Model"] == selected_model
+    ].iloc[0]
 
-    saved = joblib.load(selected_path)
-
-    model = saved["model"]
-
-    features = saved["feature_columns"]
-
-    predictions = model.predict(test_df[features])
-
-    matrix = confusion_matrix(
-        test_df["is_fraud"],
-        predictions,
-        labels=[0, 1]
-    )
+    matrix = np.array([
+        [selected_matrix["TN"], selected_matrix["FP"]],
+        [selected_matrix["FN"], selected_matrix["TP"]]
+    ])
 
     matrix_df = pd.DataFrame(
-        matrix,
+        matrix.astype(int),
         index=["Actual Legitimate", "Actual Fraud"],
         columns=["Predicted Legitimate", "Predicted Fraud"]
     )
 
-    st.subheader("Confusion Matrix")
-
-    st.dataframe(matrix_df, width="stretch")
-
-    st.download_button(
-        "Download Model Comparison",
-        comparison.to_csv(index=False),
-        file_name="model_comparison.csv",
-        mime="text/csv"
+    st.dataframe(
+        matrix_df,
+        width="stretch"
     )
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    col1.metric("True Negatives", int(selected_matrix["TN"]))
+    col2.metric("False Positives", int(selected_matrix["FP"]))
+    col3.metric("False Negatives", int(selected_matrix["FN"]))
+    col4.metric("True Positives", int(selected_matrix["TP"]))
+
+    # -------------------------------
+    # DOWNLOAD REPORT
+    # -------------------------------
+
+    st.divider()
+
+    st.subheader("Download Evaluation Reports")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+
+        st.download_button(
+            "Download Model Comparison",
+            comparison.to_csv(index=False),
+            file_name="model_comparison.csv",
+            mime="text/csv",
+            width="stretch"
+        )
+
+    with col2:
+
+        st.download_button(
+            "Download Confusion Matrices",
+            matrices_df.to_csv(index=False),
+            file_name="confusion_matrices.csv",
+            mime="text/csv",
+            width="stretch"
+        )
 
 
 # --------------------------------------------------
@@ -753,8 +1085,19 @@ elif page == "About Project":
 
     ### Machine Learning Models
 
-    - Logistic Regression
-    - Random Forest
+    - Logistic Regression (Supervised Learning)
+    - Random Forest (Supervised Learning)
+    - Isolation Forest (Unsupervised Anomaly Detection)
+
+    ### Model Evaluation
+
+    - Accuracy
+    - Precision
+    - Recall
+    - F1 Score
+    - PR-AUC
+    - Confusion Matrix
+    - Contamination Analysis
 
     ### Feature Engineering
 
@@ -784,7 +1127,10 @@ elif page == "About Project":
     - Labels do not represent verified bank fraud.
     - Model predictions are experimental.
     - This project is not intended for production financial decisions.
+    - Isolation Forest showed limited ability to rank synthetic fraud labels.
+    - Contamination changes the anomaly detection threshold and false-positive trade-off.
     """)
+    
 
     st.info(
         "Developed as a Data Science and Machine Learning portfolio project."

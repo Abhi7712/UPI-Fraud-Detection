@@ -1,207 +1,162 @@
-
 # UPI Fraud Detection & Intelligence Dashboard
 
-An end-to-end Machine Learning project for analyzing synthetic UPI transactions, identifying suspicious patterns, and estimating transaction fraud risk.
+An end-to-end machine-learning portfolio project that explores transaction analytics, historical feature engineering, supervised fraud classification, unsupervised anomaly detection, model evaluation, and an interactive Streamlit dashboard.
 
-## Project Overview
+> **Research/portfolio use only.** The included data is synthetic. Its labels and model scores are not verified banking outcomes and must not be used to approve, block, or investigate real payments.
 
-This project demonstrates a machine learning workflow for UPI transaction analysis using feature engineering, supervised classification, model evaluation, and an interactive Streamlit dashboard.
+## What is included
 
-The goal is to explore how transaction characteristics and historical user behavior can be used to identify potentially fraudulent activity.
+- Streamlit dashboard: Overview, Check Transaction, Bulk CSV Detection, Prediction History, Model Performance, Transactions, Fraud Analysis, and About.
+- Single-transaction FRAUD / NOT FRAUD classification with suspicious indicators.
+- Bulk CSV scoring with downloadable prediction results.
+- Local SQLite prediction history stored in `data/processed/prediction_history.db`.
+- Leakage-aware historical features based on transactions occurring before the current transaction.
+- Chronological 80/20 train-test split.
+- Logistic Regression and Random Forest supervised classifiers.
+- Isolation Forest anomaly-detection variants trained on legitimate training rows.
+- Evaluation reports: Accuracy, Precision, Recall, F1, PR-AUC, and confusion-matrix counts.
+- Input validation, heuristic suspicious indicators, and automated tests.
 
-**Important:** This project uses a synthetic dataset. Its labels and results do not represent verified real-world banking fraud.
+## Dataset
 
-## Features
+The supplied CSV contains 10,000 synthetic transactions and 420 records labelled as fraud (`is_fraud=1`). These are synthetic labels, not verified fraud cases. The dataset also contains precomputed flags such as `iqr_flag`, `if_flag`, and `if_flag_v2`; the dashboard displays anomaly flags separately from the `is_fraud` target.
 
-- Transaction analytics dashboard
-- Fraud label distribution analysis
-- Historical transaction feature engineering
-- Leakage-aware chronological train-test split
-- Logistic Regression model
-- Random Forest model
-- Fraud risk score prediction
-- Model comparison
-- Confusion matrix
-- Precision, Recall, F1 Score and PR-AUC
-- Transaction filtering and CSV export
-- Automated feature tests
-
-## Project Structure
+## Project structure
 
 ```text
 UPI-Fraud-Dashboard/
-│
 ├── app.py
 ├── requirements.txt
 ├── README.md
 ├── .gitignore
-│
 ├── data/
-│   ├── raw/
-│   │   └── upi_transactions.csv
-│   └── processed/
-│       └── test_data.csv
-│
+│   ├── raw/upi_transactions.csv
+│   └── processed/test_data.csv
 ├── models/
 │   ├── logistic_regression.joblib
-│   └── random_forest.joblib
-│
+│   ├── random_forest.joblib
+│   └── isolation_forest_*.joblib
+├── notebooks/UPI_Fraud_Detection.ipynb
+├── reports/
+│   ├── model_comparison.csv
+│   └── confusion_matrices.csv
 ├── src/
-│   ├── __init__.py
 │   ├── feature_engineering.py
 │   ├── train.py
 │   ├── evaluate.py
-│   └── predict.py
-│
-├── notebooks/
-│   └── UPI_Fraud_Detection.ipynb
-│
-├── reports/
-│   ├── model_comparison.csv
-│   ├── confusion_matrices.csv
-│   └── figures/
-│
+│   ├── predict.py
+│   └── storage.py
 └── tests/
-    ├── __init__.py
-    └── test_features.py
+    ├── test_features.py
+    └── test_storage.py
 ```
 
-## Dataset
+## Features used by the models
 
-- Total transactions: 10,000
-- Fraud-labelled transactions: 420
-- Legitimate transactions: 9,580
-- Dataset type: Synthetic
-- Target variable: `is_fraud`
+**Numeric:** `amount`, `hour`, `hour_sin`, `hour_cos`, `is_weekend`, `user_avg_amount_prior`, `amount_deviation`, `user_transaction_count_prior`, `transactions_last_hour`.
 
-## Technology Stack
+**Categorical:** `merchant_category`, `device_type`, `location`.
 
-- Python
-- Pandas
-- NumPy
-- Scikit-learn
-- Streamlit
-- Plotly
-- Matplotlib
-- Joblib
-- Pytest
+Historical average, prior transaction count, and previous-hour velocity are computed using earlier transactions only. The model does not use the raw dataset's precomputed full-history average columns.
 
-## Machine Learning Models
+## Model evaluation
 
-### 1. Logistic Regression
-A supervised classification baseline for transaction risk analysis.
+The saved evaluation report from the supplied project contains the following chronological holdout results:
 
-### 2. Random Forest
-An ensemble classification model used to capture nonlinear relationships between transaction features.
+| Model | Accuracy | Precision | Recall | F1 | PR-AUC |
+|---|---:|---:|---:|---:|---:|
+| Logistic Regression | 89.35% | 21.40% | 51.11% | 30.16% | 0.4921 |
+| Random Forest | 97.35% | 100.00% | 41.11% | 58.27% | 0.4794 |
+| Isolation Forest (0.02) | 92.60% | 10.81% | 8.89% | 9.76% | 0.0884 |
+| Isolation Forest (0.03) | 91.65% | 11.11% | 12.22% | 11.64% | 0.0884 |
+| Isolation Forest (0.04) | 91.00% | 11.21% | 14.44% | 12.62% | 0.0884 |
+| Isolation Forest (0.05) | 89.50% | 12.50% | 22.22% | 16.00% | 0.0884 |
+| Isolation Forest (0.08) | 86.40% | 12.40% | 33.33% | 18.07% | 0.0884 |
 
-## Feature Engineering
+Random Forest has the highest F1 among the two supervised models in this saved run and produced no false positives on this particular holdout, but it missed 53 of 90 fraud-labelled test records. That trade-off matters: high precision does not mean high fraud coverage.
 
-The project creates historical and time-based features:
+Isolation Forest contamination changes the anomaly decision threshold. It changes the number of flagged records and the precision/recall trade-off; the same underlying anomaly ranking can retain the same PR-AUC across contamination variants.
 
-- Transaction amount
-- Transaction hour
-- Cyclical hour encoding
-- Weekend indicator
-- Previous average transaction amount
-- Transaction amount deviation
-- Previous transaction count
-- Transactions during the previous hour
-- Merchant category
-- Device type
-- Location
+These are results on one synthetic dataset and one chronological split. They do not establish real-world performance or generalization.
 
-Historical features are calculated using transactions that occurred before the current transaction.
+## Setup (Windows / PowerShell)
 
-## Model Evaluation
-
-Chronological split:
-
-- Training records: 8,000
-- Testing records: 2,000
-
-Initial evaluation results:
-
-| Metric | Logistic Regression | Random Forest |
-|---|---:|---:|
-| Accuracy | 89.35% | 97.35% |
-| Precision | 21.40% | 100.00% |
-| Recall | 51.11% | 41.11% |
-| F1 Score | 30.16% | 58.27% |
-| PR-AUC | 0.4921 | 0.4794 |
-
-These are experimental results on the supplied synthetic dataset, not evidence of real-world fraud detection performance.
-
-## Installation
-
-Clone the repository:
-
-```bash
-git clone https://github.com/Abhi7712/UPI-Fraud-Detection.git
-cd UPI-Fraud-Detection
-```
-
-Create a virtual environment:
-
-```bash
-python -m venv venv
-```
-
-Activate it on Windows:
+Open a terminal in the project folder:
 
 ```powershell
+python -m venv venv
 venv\Scripts\activate
-```
-
-Install dependencies:
-
-```bash
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-## Run the Project
+## Run
 
-Train the models:
+Train/rebuild all models and the chronological test set:
 
-```bash
+```powershell
 python -m src.train
 ```
 
-Evaluate the models:
+Evaluate models and regenerate CSV reports:
 
-```bash
+```powershell
 python -m src.evaluate
 ```
 
 Run automated tests:
 
-```bash
+```powershell
 python -m pytest tests/ -v
 ```
 
 Launch the dashboard:
 
-```bash
+```powershell
 python -m streamlit run app.py
 ```
 
-## Limitations
+Open the local URL printed by Streamlit (usually `http://localhost:8501`).
 
-- The dataset is synthetic and does not contain independently verified banking fraud outcomes.
-- Model probabilities are not calibrated fraud probabilities.
-- Risk thresholds are experimental.
-- Results may not generalize to actual UPI transactions.
-- Further validation on representative, privacy-protected real-world data would be required before any operational use.
+## Transaction checking
 
-## Future Improvements
+The **Check Transaction** page takes transaction amount, hour, merchant, device, location, weekend status, and user-history aggregates. It returns a clear **FRAUD** or **NOT FRAUD** model decision, an uncalibrated model score, an illustrative risk band, and rule-based indicators.
 
-- Add Isolation Forest comparison.
-- Improve recall through threshold tuning.
-- Add explainable AI using SHAP.
-- Add temporal validation and model monitoring.
-- Improve fraud-risk visualization.
+The **Bulk CSV Detection** page accepts a CSV with these exact columns:
+
+```text
+amount,hour,user_avg_amount_prior,user_transaction_count_prior,
+transactions_last_hour,merchant_category,device_type,location,is_weekend
+```
+
+Download the CSV template from that page to get a ready-to-fill example. The **Prediction History** page shows single and bulk predictions saved in a local SQLite database. This history is local to the machine running the dashboard.
+
+## Live prediction notes
+
+The Live Prediction page accepts a transaction and historical user aggregates. For a meaningful simulation, those historical values must be computed from transactions strictly before the transaction being scored. The app shows heuristic indicators (e.g. unusually high amount vs. the entered historical average); these are simple rules, not SHAP explanations.
+
+The percentage displayed is an **uncalibrated model score** from `predict_proba`, not a calibrated probability that fraud will occur. The High/Medium/Low bands are illustrative UI categories, not bank policy thresholds.
+
+## Limitations and responsible use
+
+- The dataset is synthetic and does not represent real payment-system traffic.
+- Fraud labels are not independently verified.
+- One chronological holdout is not sufficient for production validation.
+- The class balance and generated patterns may differ from real fraud.
+- The model score is not calibrated.
+- No live UPI/bank API, account linkage, alert delivery, or case-management system is connected.
+- A real deployment would require privacy/security review, representative labelled data, temporal backtesting, threshold governance, human review, monitoring, and regulatory/compliance assessment.
 
 ## Author
 
-**Abhishek Gupta**
+**Abhishek Gupta**  
+Machine Learning / Data Science Portfolio Project
 
-Machine Learning & Data Science Portfolio Project
+
+## Model artifact compatibility
+
+The included `.joblib` models were serialized with **scikit-learn 1.6.1**. The requirements file pins that version because scikit-learn does not guarantee that serialized models can be loaded across arbitrary versions. If you intentionally change the scikit-learn version, retrain the models using `python -m src.train` and regenerate reports using `python -m src.evaluate`.
+
+## Prediction history data
+
+Prediction history is stored in `data/processed/prediction_history.db` (created automatically after the first prediction). It is local application data and is ignored by Git. Do not store real payment credentials, PINs, OTPs, or sensitive personal information in this demo.

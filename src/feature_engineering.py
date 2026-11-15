@@ -59,10 +59,17 @@ def load_transaction_data(file_path):
     )
 
     df = df.dropna(
-        subset=["transaction_time", "amount", TARGET_COLUMN]
+        subset=[
+            "transaction_id", "user_id", "transaction_time",
+            "amount", TARGET_COLUMN
+        ]
     ).copy()
 
-    df[TARGET_COLUMN] = df[TARGET_COLUMN].astype(int)
+    if not np.isfinite(df["amount"].to_numpy(dtype=float)).all():
+        raise ValueError("Transaction amounts must be finite numbers.")
+
+    if not np.isfinite(df[TARGET_COLUMN].to_numpy(dtype=float)).all():
+        raise ValueError("is_fraud must contain finite numeric values.")
 
     if not df[TARGET_COLUMN].isin([0, 1]).all():
         raise ValueError("is_fraud must contain only 0 and 1.")
@@ -70,6 +77,7 @@ def load_transaction_data(file_path):
     if (df["amount"] < 0).any():
         raise ValueError("Transaction amounts cannot be negative.")
 
+    df[TARGET_COLUMN] = df[TARGET_COLUMN].astype(int)
     return df
 
 
@@ -108,7 +116,7 @@ def create_features(df):
     )
 
     df["is_weekend"] = (
-        df["transaction_time"].dt.dayofweek >= 5
+        df["transaction_time"].dt.day_of_week >= 5
     ).astype(int)
 
     # Historical user features
@@ -132,30 +140,34 @@ def create_features(df):
         df["amount"] - df["user_avg_amount_prior"]
     )
 
-    # Count transactions by the same user in the previous hour.
+
+    # Count same user's transactions in the previous 60 minutes
+    
+    # Count same user's transactions in the previous 60 minutes
     previous_hour_counts = np.zeros(len(df), dtype=int)
 
     for _, group in df.groupby("user_id", sort=False):
-        times = (
-            group["transaction_time"]
-            .astype("int64")
-            .to_numpy()
+        # Explicitly convert timestamps to nanosecond precision
+        times = group["transaction_time"].to_numpy(
+            dtype="datetime64[ns]"
         )
 
-        positions = group.index.to_numpy()
+        # Start of the previous 60-minute window
+        window_starts = times - np.timedelta64(1, "h")
 
-        for i, current_time in enumerate(times):
-            window_start = current_time - 60 * 60 * 1_000_000_000
+        # Find earlier transactions strictly newer than the window start
+        left_positions = np.searchsorted(
+            times,
+            window_starts,
+            side="right"
+        )
 
-            left = np.searchsorted(
-                times[:i],
-                window_start,
-                side="right"
-            )
+        counts = np.arange(len(times)) - left_positions
 
-            previous_hour_counts[positions[i]] = i - left
+        previous_hour_counts[group.index.to_numpy()] = counts
 
     df["transactions_last_hour"] = previous_hour_counts
+
 
     # Missing categorical values
     for col in CATEGORICAL_FEATURES:

@@ -94,3 +94,20 @@ def test_time_features_are_created():
 
     for column in required_columns:
         assert column in df.columns
+
+
+def test_historical_features_do_not_use_current_or_future_amounts():
+    df = create_features(sample_data())
+    user_transactions = df[df["user_id"] == "U1"].reset_index(drop=True)
+
+    # The second transaction sees only the first transaction's amount.
+    assert user_transactions.loc[1, "user_avg_amount_prior"] == 1000
+    # The third transaction sees the first two, not its own amount.
+    assert user_transactions.loc[2, "user_avg_amount_prior"] == 1500
+
+
+def test_missing_categories_are_filled_with_unknown():
+    data = sample_data()
+    data.loc[0, "merchant_category"] = None
+    result = create_features(data)
+    assert result.loc[result["transaction_id"] == "T1", "merchant_category"].iloc[0] == "Unknown"

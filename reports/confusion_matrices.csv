@@ -1,3 +1,8 @@
-Model,True Negative,False Positive,False Negative,True Positive
+Model,TN,FP,FN,TP
 logistic_regression,1741,169,44,46
 random_forest,1910,0,53,37
+isolation_forest_0_02,1844,66,82,8
+isolation_forest_0_03,1822,88,79,11
+isolation_forest_0_04,1807,103,77,13
+isolation_forest_0_05,1770,140,70,20
+isolation_forest_0_08,1698,212,60,30
